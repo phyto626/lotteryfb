@@ -160,7 +160,7 @@
 
   /* ── Input ── */
   .input-row { display: flex; gap: 10px; }
-  input[type=text], input[type=number], select {
+  input[type=text], input[type=number], input[type=datetime-local], select {
     width: 100%;
     background: var(--surface2);
     border: 1px solid var(--border);
@@ -175,6 +175,8 @@
   input:focus, select:focus { border-color: var(--accent); }
   input::placeholder { color: var(--text-muted); }
   select option { background: var(--surface2); }
+  select[size] { height: auto !important; }
+  input[type=datetime-local]::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
 
   label {
     display: block;
@@ -301,6 +303,23 @@
   }
   .comment-item .name { font-weight: 700; margin-bottom: 2px; }
   .comment-item .msg { color: var(--text-muted); font-size: .8rem; line-height: 1.4; word-break: break-all; }
+  .comment-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: .75rem;
+    font-weight: 700;
+    color: var(--accent);
+    border: 1px solid rgba(79,123,255,.3);
+    text-decoration: none;
+    transition: all .15s;
+    white-space: nowrap;
+  }
+  .comment-link:hover { background: rgba(79,123,255,.12); border-color: var(--accent); }
+  .winner-item a.comment-link { padding: 6px 12px; font-size: .8rem; }
 
   /* ── Lottery section ── */
   .lottery-settings {
@@ -552,12 +571,17 @@
         </select>
       </div>
       <div class="field" id="post-field" style="display:none">
-        <label>選擇貼文</label>
-        <select id="post-select">
+        <label>搜尋貼文</label>
+        <input type="text" id="post-search" placeholder="輸入關鍵字篩選貼文..." oninput="filterPostOptions()" style="margin-bottom:8px" />
+        <label>選擇貼文 <span id="post-count-label" style="color:var(--text-muted);font-weight:400"></span></label>
+        <select id="post-select" size="5" style="height:auto;padding:6px 0">
           <option value="">-- 請選擇貼文 --</option>
         </select>
+        <button class="btn btn-outline" id="btn-load-more-posts" onclick="loadMorePosts()" style="display:none;margin-top:8px;font-size:.78rem;width:100%">
+          載入更多貼文 ↓
+        </button>
       </div>
-      <button class="btn btn-primary" id="btn-fetch-from-page" onclick="fetchCommentsFromPage()" style="display:none" disabled>
+      <button class="btn btn-primary" id="btn-fetch-from-page" onclick="fetchCommentsFromPage()" style="display:none;margin-top:4px" disabled>
         抓取留言
       </button>
     </div>
@@ -602,12 +626,29 @@
       <div class="toggle-chip" id="chip-keyword" onclick="toggleKeyword()">
         關鍵字過濾
       </div>
+      <div class="toggle-chip" id="chip-timerange" onclick="toggleTimeRange()">
+        時間區間
+      </div>
     </div>
 
     <div id="keyword-field" style="display:none;margin-bottom:14px">
       <div class="input-row">
         <input type="text" id="keyword-input" placeholder="輸入關鍵字，留言需包含此字才納入抽籤" oninput="applyFilters()" />
       </div>
+    </div>
+
+    <div id="timerange-field" style="display:none;margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label>開始時間</label>
+          <input type="datetime-local" id="time-start" onchange="applyFilters()" />
+        </div>
+        <div>
+          <label>結束時間</label>
+          <input type="datetime-local" id="time-end" onchange="applyFilters()" />
+        </div>
+      </div>
+      <div id="timerange-hint" style="font-size:.75rem;color:var(--text-muted);margin-top:6px"></div>
     </div>
 
     <div class="comment-list" id="comment-list">
@@ -672,7 +713,10 @@ let state = {
   winners: [],
   dedup: true,
   keywordFilter: false,
+  timeRangeFilter: false,
   drawing: false,
+  allPosts: [],         // all fetched posts for search
+  postCursor: null,     // pagination cursor for posts
 };
 
 // ── Tab switch ──
@@ -801,28 +845,81 @@ function loadPosts() {
   const opt = sel.options[sel.selectedIndex];
   if (!opt.value) return;
   state.pageToken = opt.dataset.token;
+  state.allPosts = [];
+  state.postCursor = null;
 
   const postSel = document.getElementById('post-select');
-  postSel.innerHTML = '<option>載入中...</option>';
+  postSel.innerHTML = '<option disabled>載入中...</option>';
   document.getElementById('post-field').style.display = 'block';
+  document.getElementById('btn-fetch-from-page').style.display = 'none';
+  document.getElementById('btn-load-more-posts').style.display = 'none';
 
   FB.api(`/${opt.value}/feed`, {
     access_token: state.pageToken,
     fields: 'id,message,created_time',
-    limit: 20
+    limit: 50
   }, function(res) {
-    postSel.innerHTML = '<option value="">-- 請選擇貼文 --</option>';
-    (res.data || []).forEach(post => {
-      const opt2 = document.createElement('option');
-      opt2.value = post.id;
-      const preview = (post.message || '（無文字貼文）').substring(0, 50);
-      const date = new Date(post.created_time).toLocaleDateString('zh-TW');
-      opt2.textContent = `[${date}] ${preview}`;
-      postSel.appendChild(opt2);
-    });
+    state.allPosts = res.data || [];
+    state.postCursor = res.paging?.cursors?.after || null;
+    renderPostOptions();
+    if (state.postCursor) {
+      document.getElementById('btn-load-more-posts').style.display = 'block';
+    }
     document.getElementById('btn-fetch-from-page').style.display = 'inline-flex';
     document.getElementById('btn-fetch-from-page').disabled = false;
   });
+}
+
+function loadMorePosts() {
+  const sel = document.getElementById('page-select');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt.value || !state.postCursor) return;
+
+  const btn = document.getElementById('btn-load-more-posts');
+  btn.textContent = '載入中...';
+  btn.disabled = true;
+
+  FB.api(`/${opt.value}/feed`, {
+    access_token: state.pageToken,
+    fields: 'id,message,created_time',
+    limit: 50,
+    after: state.postCursor
+  }, function(res) {
+    state.allPosts = [...state.allPosts, ...(res.data || [])];
+    state.postCursor = res.paging?.cursors?.after || null;
+    renderPostOptions();
+    btn.textContent = '載入更多貼文 ↓';
+    btn.disabled = false;
+    if (!state.postCursor) btn.style.display = 'none';
+  });
+}
+
+function renderPostOptions() {
+  const kw = document.getElementById('post-search')?.value?.trim() || '';
+  const postSel = document.getElementById('post-select');
+  const filtered = kw
+    ? state.allPosts.filter(p => (p.message || '').includes(kw))
+    : state.allPosts;
+
+  // Keep selected value
+  const prevVal = postSel.value;
+  postSel.innerHTML = '<option value="">-- 請選擇貼文 --</option>';
+  filtered.forEach(post => {
+    const o = document.createElement('option');
+    o.value = post.id;
+    const preview = (post.message || '（無文字貼文）').substring(0, 60);
+    const date = new Date(post.created_time).toLocaleDateString('zh-TW');
+    o.textContent = `[${date}] ${preview}`;
+    postSel.appendChild(o);
+  });
+  if (prevVal) postSel.value = prevVal;
+
+  const label = document.getElementById('post-count-label');
+  if (label) label.textContent = `（共 ${state.allPosts.length} 筆${kw ? `，篩選後 ${filtered.length} 筆` : ''}）`;
+}
+
+function filterPostOptions() {
+  renderPostOptions();
 }
 
 // ── Fetch comments from page ──
@@ -965,6 +1062,25 @@ function applyFilters() {
     if (kw) list = list.filter(c => c.message.includes(kw));
   }
 
+  // Time range filter
+  if (state.timeRangeFilter) {
+    const startVal = document.getElementById('time-start').value;
+    const endVal = document.getElementById('time-end').value;
+    const start = startVal ? new Date(startVal) : null;
+    const end = endVal ? new Date(endVal) : null;
+    if (start || end) {
+      list = list.filter(c => {
+        const t = new Date(c.time);
+        if (start && t < start) return false;
+        if (end && t > end) return false;
+        return true;
+      });
+      // Update hint
+      const hint = document.getElementById('timerange-hint');
+      if (hint) hint.textContent = `⏱ 篩選後剩 ${list.length} 則留言符合時間區間`;
+    }
+  }
+
   // Dedup
   if (state.dedup) {
     const seen = new Set();
@@ -1004,6 +1120,36 @@ function toggleKeyword() {
   applyFilters();
 }
 
+function toggleTimeRange() {
+  state.timeRangeFilter = !state.timeRangeFilter;
+  document.getElementById('chip-timerange').classList.toggle('active', state.timeRangeFilter);
+  const field = document.getElementById('timerange-field');
+  field.style.display = state.timeRangeFilter ? 'block' : 'none';
+
+  // Auto-fill min/max from loaded comments on first open
+  if (state.timeRangeFilter && state.allComments.length > 0) {
+    const times = state.allComments.map(c => new Date(c.time)).filter(d => !isNaN(d));
+    const minT = new Date(Math.min(...times));
+    const maxT = new Date(Math.max(...times));
+    const toLocal = d => new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    const startEl = document.getElementById('time-start');
+    const endEl = document.getElementById('time-end');
+    if (!startEl.value) startEl.value = toLocal(minT);
+    if (!endEl.value) endEl.value = toLocal(maxT);
+  }
+  applyFilters();
+}
+
+// Build FB comment permalink
+function commentUrl(commentId) {
+  if (!commentId) return null;
+  const parts = commentId.split('_');
+  if (parts.length >= 2) {
+    return `https://www.facebook.com/permalink.php?story_fbid=${parts[0]}&id=${parts[0]}&comment_id=${commentId}`;
+  }
+  return null;
+}
+
 function renderCommentList() {
   const el = document.getElementById('comment-list');
   if (state.filteredComments.length === 0) {
@@ -1012,12 +1158,19 @@ function renderCommentList() {
   }
   el.innerHTML = state.filteredComments.slice(0, 200).map(c => {
     const initial = c.name.charAt(0);
+    const url = commentUrl(c.id);
+    const linkBtn = url ? `<a href="${url}" target="_blank" rel="noopener" class="comment-link" title="在 Facebook 查看原留言">↗</a>` : '';
+    const timeStr = c.time ? new Date(c.time).toLocaleString('zh-TW', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
     return `<div class="comment-item">
       <div class="avatar">${initial}</div>
-      <div>
-        <div class="name">${escHtml(c.name)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="name">${escHtml(c.name)}</div>
+          ${timeStr ? `<div style="font-size:.7rem;color:var(--text-muted)">${timeStr}</div>` : ''}
+        </div>
         <div class="msg">${escHtml(c.message)}</div>
       </div>
+      ${linkBtn}
     </div>`;
   }).join('');
   if (state.filteredComments.length > 200) {
@@ -1116,12 +1269,19 @@ function resetDraw() {
 function renderWinners() {
   document.getElementById('card-winners').style.display = 'block';
   const el = document.getElementById('winners-list');
-  el.innerHTML = state.winners.map((w, i) => `
+  el.innerHTML = state.winners.map((w, i) => {
+    const url = commentUrl(w.id);
+    const link = url ? `<a href="${url}" target="_blank" rel="noopener" class="comment-link" title="在 Facebook 查看原留言">↗ 查看留言</a>` : '';
+    return `
     <div class="winner-item">
       <div class="winner-rank">#${String(i+1).padStart(2,'0')}</div>
-      <div class="winner-name">🏆 ${escHtml(w.name)}</div>
-      <div class="winner-msg">${escHtml(w.message)}</div>
-    </div>`).join('');
+      <div style="flex:1;min-width:0">
+        <div class="winner-name">🏆 ${escHtml(w.name)}</div>
+        <div class="winner-msg">${escHtml(w.message)}</div>
+      </div>
+      ${link}
+    </div>`;
+  }).join('');
   el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
