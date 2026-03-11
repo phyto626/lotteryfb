@@ -885,8 +885,9 @@ async function fetchAllComments(postId, token) {
     while (true) {
       const params = {
         access_token: token,
-        fields: 'from,message,created_time',
+        fields: 'id,from{id,name},message,created_time',
         filter: 'stream',
+        summary: true,
         limit: 100,
       };
       if (cursor) params.after = cursor;
@@ -902,7 +903,8 @@ async function fetchAllComments(postId, token) {
         state.allComments.push({
           id: c.id,
           userId: c.from?.id || '',
-          name: c.from?.name || '匿名用戶',
+          name: c.from?.name || (c.from?.id ? `用戶${c.from.id.slice(-4)}` : '匿名用戶'),
+          hasRealName: !!(c.from?.name),
           message: c.message || '',
           time: c.created_time,
         });
